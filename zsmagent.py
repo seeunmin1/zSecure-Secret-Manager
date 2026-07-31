@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
 """
-zsmagent — a small, read-only-by-default driver for IBM zSecure Secret Manager
+zsmagent — supportive agent for IBM zSecure Secret Manager
 commands on z/OS, over SSH into z/OS UNIX System Services.
 
 Design notes
 ------------
-This does NOT touch ZOC9 or the 3270 session. It opens the same SSH connection
-you open by hand from Terminal and issues the same `irrsadmin` commands.
+Rather than through an emulator, open the SSH connection via Terminal and issue`irrsadmin` commands.
 
-Result convention (observed in the reference run): a successful slp/slsi/srp
-prints NOTHING at all. Failures print a structure containing racf_major_rc and
+Result convention: a successful slp/slsi/srp prints nothing. Failures print a structure containing racf_major_rc and
 a `description` field that usually states the fix. So:
 
     empty output            -> success
     racf_major_rc: 0        -> success
     anything else           -> failure; read `description` first
 
-Safety
-------
-Writes are blocked unless you pass allow_writes=True (or --allow-writes).
-Prove the read path first. Every command issued is appended to an audit log,
-because these commands are attributable to YOUR user ID on a shared system.
 
 Usage
 -----
@@ -52,14 +45,12 @@ from typing import Any, Optional, Sequence
 try:
     import paramiko
 except ImportError:  # pragma: no cover
-    paramiko = None  # only needed for live sessions; dry-run works without it
+    paramiko = None  # only needed for live sessions
 
 
 # --------------------------------------------------------------------------
 # Command allowlist
-#
-# Only the verbs confirmed from the July reference run are listed. Before you
-# add more, check them against the product docs -- do not guess a verb name.
+
 # --------------------------------------------------------------------------
 
 READ_VERBS = {
@@ -111,8 +102,8 @@ class Result:
 def parse_result(stdout: str, stderr: str = "", exit_status: int = 0) -> Result:
     """Turn raw irrsadmin output into a Result.
 
-    Silence is success. A zero racf_major_rc is success. Everything else is a
-    failure whose `description` field is the thing worth reading.
+    Silence is success. A zero racf_major_rc indicates success. Everything else is a
+    failure read `description` field.
     """
     raw = stdout or ""
     text = raw.strip()
@@ -270,7 +261,6 @@ class ZSMSession:
     def get_local_secret(self, provider: str, secret: str) -> Result:
         return self.irrsadmin("glsi", "-p", provider, "-s", secret)
 
-    # -- the thing that cost 40 minutes ------------------------------------
 
     def raclist_refresh(self, racf_class: str) -> Result:
         """SETROPTS RACLIST(<class>) REFRESH via tsocmd.
@@ -320,13 +310,12 @@ class ZSMSession:
 # --------------------------------------------------------------------------
 # Diagnostics
 #
-# Maps the message IDs that actually come back from z/OS, SMP/E and the shell
-# to a plain-language cause and a concrete fix. Deterministic lookup, no
-# guessing: if nothing matches, say so rather than inventing an explanation.
+# Maps the message IDs that come back from z/OS, SMP/E and the shell
+# to a plain-language cause and a concrete fix. Deterministic lookup, so no
+# guessing or inventing an explanation if no  match is found.
 #
-# Every entry below was either observed in a real run or is taken from the
-# Program Directory. Add to it when you hit something new -- that is how the
-# knowledge stops living in someone's head.
+# Every entry below was either observed in a real 2+1 run or is taken from the
+# Program Directory. 
 # --------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -345,7 +334,7 @@ DIAGNOSTICS: list[Diagnosis] = [
         "line past 80 characters and the rest was cut off. IBM's sample jobs "
         "have comment lines that already run to about column 73, so there is "
         "very little room.",
-        "Almost always PATHPFX. Shorten it -- /home/yourid/t1/ works, anything "
+        "Almost always PATHPFX. Shorten it. /home/yourid/t1/ works, anything "
         "much longer does not. Then re-run `smpe --dry-run` first: it now "
         "reports the exact line and how many characters to remove.",
     ),
@@ -372,7 +361,7 @@ DIAGNOSTICS: list[Diagnosis] = [
         r"GIM20301S|SYNTAX ERROR IN THE COMMAND AT COLUMN",
         "SMP/E rejected a command's syntax",
         "The column number in the message is where SMP/E stopped. The most "
-        "common cause by far is a QUOTED value -- RFPREFIX and similar "
+        "common cause by far is a QUOTED value, RFPREFIX and similar "
         "operands do not take quotes. Once the command is dead, SMP/E flags "
         "every continuation line too, so one mistake looks like four errors.",
         "Fix only the FIRST error; the rest are cascade. Check your values "
@@ -418,8 +407,7 @@ DIAGNOSTICS: list[Diagnosis] = [
         "changed. Usually a malformed statement, a bad continuation, or a "
         "dataset name JES could not resolve.",
         "Read the job's JESMSGLG output for the IEF message naming the line. "
-        "Run `smpe --dry-run` and inspect that job's text -- a value "
-        "containing an unexpected character is the usual cause.",
+        "Run `smpe --dry-run` and inspect that job's text.",
     ),
     Diagnosis(
         r"IEF212I|DATA SET NOT FOUND",
@@ -427,7 +415,7 @@ DIAGNOSTICS: list[Diagnosis] = [
         "A DD statement referenced something that is not there. On a fresh "
         "install this usually means an earlier job in the sequence did not "
         "actually create what this one expects.",
-        "Check the previous job really ended RC 00, not just 'submitted'. If "
+        "Check the previous job really ended RC 00. If "
         "you skipped jobs with --from, you may have skipped one that was "
         "needed.",
     ),
@@ -435,7 +423,7 @@ DIAGNOSTICS: list[Diagnosis] = [
         r"racf_major_rc\s*[:=]\s*8|ICH408I|NOT AUTHORIZED",
         "RACF refused the request",
         "Your userid does not have the access this operation needs. The agent "
-        "runs with exactly your authority -- it cannot and does not escalate.",
+        "runs with exactly your authority, it cannot and does not escalate.",
         "For a zFS mount failure: point PATHPFX inside your own home "
         "directory, which needs no special authority. Otherwise the profile "
         "name in the message is what a RACF administrator needs to permit. "
@@ -457,7 +445,7 @@ DIAGNOSTICS: list[Diagnosis] = [
         "S806 means a module was not found, S878/S80A are storage, x37 codes "
         "are space.",
         "Look up the abend code in z/OS MVS System Codes. Check the spool "
-        "output for the step that failed -- the messages just before the "
+        "output for the step that failed, the messages just before the "
         "abend usually name the cause.",
     ),
     Diagnosis(
@@ -494,7 +482,7 @@ def print_diagnosis(*texts: str) -> None:
         print("No known diagnosis for this failure.\n", file=sys.stderr)
         print("The message above is the primary evidence. If a spool file was "
               "saved, search it for lines containing GIM, IEF, IKJ, ICH or "
-              "ABEND -- those carry the cause.\n"
+              "ABEND, those carry the cause.\n"
               "Worth adding to the DIAGNOSTICS table in this script once you "
               "know what it was.", file=sys.stderr)
         print(bar, file=sys.stderr)
@@ -513,11 +501,10 @@ def print_diagnosis(*texts: str) -> None:
 # --------------------------------------------------------------------------
 # Self-test
 #
-# Proves the plumbing -- write member, submit, poll, read return code, fetch
-# spool -- using jobs that allocate nothing, delete nothing and reference no
+# Tests capabilities: write member, submit, poll, read return code, fetch
+# spool using jobs that allocate nothing, delete nothing and reference no
 # dataset. IEFBR14 is a program that does nothing and ends RC 00. IDCAMS with
-# SET MAXCC=12 ends RC 12 without performing any action. Running these is as
-# close to harmless as submitting work to a mainframe gets.
+# SET MAXCC=12 ends RC 12 without performing any action.
 # --------------------------------------------------------------------------
 
 SMOKE_OK = """\
@@ -593,9 +580,9 @@ def run_selftest(runner: "SmpeRunner", spool_dir: Path = Path("spool")) -> int:
 
 
 # --------------------------------------------------------------------------
-# z/OSMF REST client -- the "did it work?" half
+# z/OSMF REST client: see results
 #
-# Submitting a job returns a ticket, not a result. z/OSMF lets us ask the
+# Submitting a job returns a ticket. z/OSMF lets us ask the
 # mainframe what happened to that ticket:
 #   GET /zosmf/restjobs/jobs/{jobname}/{jobid}
 #     -> {"status": "OUTPUT", "retcode": "CC 0000", ...}
@@ -643,8 +630,7 @@ class ZosmfClient:
             f"{self.user}:{self.password}".encode("utf-8")).decode("ascii")
         req = urllib.request.Request(url, headers={
             "Authorization": f"Basic {token}",
-            # z/OSMF rejects requests without this header; the value is
-            # irrelevant, its presence is what matters.
+            # z/OSMF rejects requests without this header
             "X-CSRF-ZOSMF-HEADER": "zsmagent",
             "Accept": "application/json",
         })
@@ -738,9 +724,9 @@ class ZosmfClient:
 #     filling is the only substitution that cannot introduce a syntax error.
 #   * Submission is blocked by default (mirrors allow_writes). --dry-run is
 #     free and prints exactly what would be written and submitted.
-#   * Each job has an RC policy. SMP/E APPLY/ACCEPT legitimately end RC 04
-#     with documented warnings; RECEIVE should be clean. Calibrate MAX_RC
-#     against your own successful run's output, not guesses.
+#   * Each job has an RC policy. SMP/E APPLY/ACCEPT may end RC 04
+#     with documented warnings. RECEIVE should be clean. Calibrate MAX_RC
+#     against your own successful run's output.
 # --------------------------------------------------------------------------
 
 _PLACEHOLDER_RE = re.compile(r"@([A-Z][A-Z0-9_]*)@")
@@ -780,8 +766,8 @@ class Step:
 
 
 # Per Program Directory GI13-0000-00 section 6.1, every job in this sequence is
-# documented as "return code of 0 if this job is successful" -- so max_rc is 0
-# throughout, not the RC 04 I previously guessed. The one documented exception
+# documented as "return code of 0 if this job is successful" so max_rc is 0
+# throughout. The one documented exception
 # is ACCEPT (6.1.10): accepting PTFs with replacement modules can give RC 04
 # from the binder, which the directory says may be ignored. A clean FMID
 # install should still be 0, so RC 04 there is surfaced rather than allowed.
@@ -906,9 +892,8 @@ def tailor(template_text: str, values: dict[str, str], name: str = "") -> str:
     out_lines = out.splitlines()
 
     # PDS members are fixed 80-byte records. A substituted line longer than
-    # that is silently TRUNCATED on write (EDC5003I), so catch it here. This
-    # applies to comment lines too -- IBM's banner comments already run to
-    # column ~73, so a long value pushes them over.
+    # that is silently TRUNCATED on write (EDC5003I). This
+    # applies to comment lines too.
     over80 = []
     for i, line in enumerate(out_lines):
         if len(line.rstrip("\n")) > 80:
