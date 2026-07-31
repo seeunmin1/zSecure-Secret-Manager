@@ -34,6 +34,7 @@ ssh <YOURID>@<host> "tsocmd \"ALLOCATE DATASET('<YOURID>.TEST.JCL') NEW CATALOG 
 ```
 
 ---
+# Reference the Runbook.md file for exact commands to run
 
 ## Setup
 
